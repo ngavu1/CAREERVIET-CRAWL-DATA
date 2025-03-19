@@ -1,0 +1,77 @@
+import pandas as pd
+import re
+from collections import Counter
+
+# 1️⃣ Load the Excel File
+file_path = "C:/NGA/2. TOOLS/PYTHON/CareerViet_IT_clean data.xlsx"  # Update with your file path
+skills_sheet = "IT Skills"  # Sheet with Tech Skills and Soft Skills
+cleaned_data_sheet = "Cleaned data"  # Sheet with Job Descriptions and Job Types
+
+# Load IT Skills and Cleaned Data
+it_skills_df = pd.read_excel(file_path, sheet_name=skills_sheet, engine="openpyxl")
+cleaned_data_df = pd.read_excel(file_path, sheet_name=cleaned_data_sheet, engine="openpyxl")
+
+# Extract Tech and Soft Skills
+tech_skills = it_skills_df["Tech Skill"].dropna().str.lower().tolist()  # Normalize to lowercase
+soft_skills = it_skills_df["Soft Skill"].dropna().str.lower().tolist()  # Normalize to lowercase
+
+# Ensure Job Type and JD_ENG columns exist
+cleaned_data_df = cleaned_data_df.dropna(subset=["Job_Type", "JD_ENG"])
+
+# Group data by Job Type
+grouped_data = cleaned_data_df.groupby("Job_Type")
+
+# 2️⃣ Define a function to count skills in job descriptions
+def count_skills_in_text(text, skills):
+    text = text.lower()  # Normalize to lowercase
+    counts = Counter()
+    for skill in skills:
+        if re.search(rf"\b{re.escape(skill)}\b", text):  # Match exact words
+            counts[skill] += 1
+    return counts
+
+# 3️⃣ Analyze and get Top 20 for each Job Type
+results = {}
+
+for job_type, group in grouped_data:
+    tech_skill_counts = Counter()
+    soft_skill_counts = Counter()
+    for jd in group["JD_ENG"]:
+        tech_skill_counts.update(count_skills_in_text(jd, tech_skills))
+        soft_skill_counts.update(count_skills_in_text(jd, soft_skills))
+    # Get Top 20 for Tech and Soft Skills
+    top_10_tech = tech_skill_counts.most_common(10)
+    top_5_soft = soft_skill_counts.most_common(5)
+    # Store results
+    results[job_type] = {
+        "Top Tech Skills": pd.DataFrame(top_10_tech, columns=["Skill", "Frequency"]),
+        "Top Soft Skills": pd.DataFrame(top_5_soft, columns=["Skill", "Frequency"])
+    }
+
+# 4️⃣ Save results to Excel
+output_path = "Top_20_Skills_By_Job_Type.xlsx"
+with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+    for job_type, data in results.items():
+        # Giới hạn tên sheet Excel không vượt quá 31 ký tự
+        max_sheet_name_length = 31
+
+        for job_type, data in results.items():
+            # Làm sạch và xử lý tên loại công việc để phù hợp với quy định của Excel
+            safe_job_type = re.sub(r'[\/:*?"<>|]', '_', job_type)  # Thay các ký tự không hợp lệ bằng "_"
+            safe_job_type = safe_job_type[:max_sheet_name_length - 5]  # Dành chỗ cho "_Tech" hoặc "_Soft"
+
+            # Tạo tên sheet an toàn
+            tech_sheet_name = f"{safe_job_type}_Tech"
+            soft_sheet_name = f"{safe_job_type}_Soft"
+
+            # Lưu dữ liệu vào các sheet
+            data["Top Tech Skills"].to_excel(writer, sheet_name=tech_sheet_name, index=False)
+            data["Top Soft Skills"].to_excel(writer, sheet_name=soft_sheet_name, index=False)
+
+print(f"\nResults saved to {output_path}")
+
+# In kết quả theo định dạng cụ thể
+for job_type, data in results.items():
+    tech_skills = ", ".join(data["Top Tech Skills"]["Skill"])
+    soft_skills = ", ".join(data["Top Soft Skills"]["Skill"])
+    print(f"{job_type}: Technical skills: {tech_skills}. Soft skills: {soft_skills}.")
