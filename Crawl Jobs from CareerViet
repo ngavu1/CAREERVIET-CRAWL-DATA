@@ -1,0 +1,198 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from bs4 import BeautifulSoup
+import requests
+import csv
+import time
+from webdriver_manager.chrome import ChromeDriverManager
+
+# URL trang danh sách việc làm
+base_url = "https://careerviet.vn/viec-lam/cntt-phan-cung-mang-cntt-phan-mem-c63,1-trang-{}-vi.html"
+
+# File CSV để lưu kết quả
+csv_filename = "jobs.csv"
+
+# Ẩn danh
+options = webdriver.ChromeOptions()
+options.add_argument("--incognito")  # Chế độ ẩn danh
+options.add_argument("--disable-geolocation")  # Vô hiệu hóa geolocation
+options.add_argument("--disable-application-cache")  # Xóa cache
+options.add_argument("--disk-cache-size=0")  # Bỏ sử dụng cache
+
+# Khởi tạo trình duyệt
+service = Service(ChromeDriverManager().install())
+driver = webdriver.Chrome(service=service, options=options)
+
+# Cài tọa độ giả (nếu cần)
+driver.execute_cdp_cmd("Emulation.setGeolocationOverride", {
+    "latitude": 0,  # Giá trị vĩ độ (fake)
+    "longitude": 0,  # Giá trị kinh độ (fake)
+    "accuracy": 100  # Độ chính xác
+})
+
+# Cấu hình Selenium (đã có options)
+driver = webdriver.Chrome(service=service, options=options)
+
+# Mở file CSV để ghi dữ liệu
+with open(csv_filename, mode='w', newline='', encoding='utf-8') as file:
+    writer = csv.writer(file)
+    # Ghi tiêu đề cột
+    writer.writerow(
+        ["Job Title", "Job ID", "Company", "Salary", "Location", "Industry", "Experience", "Expire Date",
+         "Updated Date", "Position", "Job Requirement", "Job Link"])
+
+    page = 20  # Bắt đầu từ trang 1
+    max_pages = 24  # Số trang tối đa cần cào
+    while page <= max_pages:
+        print(f"📄 Đang cào dữ liệu trang {page}...")
+        url = base_url.format(page)
+
+        # Selenium tải trang
+        driver.get(url)
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CLASS_NAME, 'job-item')))
+
+        # Cuộn xuống để tải thêm công việc
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        while True:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(3)
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
+
+        # Lấy mã nguồn trang sau khi tải xong
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+
+        # Tìm tất cả các block chứa thông tin việc làm
+        job_blocks = soup.find_all('div', class_='job-item')
+
+        # In ra số lượng công việc
+        print(f"Số lượng công việc trên trang {page}: {len(job_blocks)}")
+
+        # Nếu không có công việc nào -> Dừng lại
+        if not job_blocks:
+            print("🚀 Hoàn thành! Không còn dữ liệu để cào.")
+            break
+
+        # Duyệt qua từng công việc
+        for job_block in job_blocks:
+            # 🆔 ID công việc
+            job_id = job_block.get('id', '').replace('job-item-', '')
+
+            # 📌 Tiêu đề công việc
+            title_tag = job_block.find('div', class_='title')
+            job_title = title_tag.text.strip() if title_tag else "Không có tiêu đề"
+
+            # 🔗 Link công việc
+            job_link = title_tag.find('a')['href'] if title_tag and title_tag.find('a') else "Không có link"
+
+            # 🏢 Công ty
+            company_tag = job_block.find('a', class_='company-name')
+            company = company_tag.text.strip() if company_tag else "Không có thông tin công ty"
+
+            # 💰 Lương
+            salary_tag = job_block.find('div', class_='salary')
+            salary = salary_tag.text.strip().replace("Lương: ", "") if salary_tag else "Không có thông tin lương"
+
+            # 📍 Địa điểm
+            location_tag = job_block.find('div', class_='location')
+            location = location_tag.text.strip() if location_tag else "Không có thông tin địa điểm"
+
+            # 📅 Hạn nộp
+            expire_tag = job_block.find('div', class_='expire-date')
+            expire_date = expire_tag.text.strip().replace("Hạn nộp: ", "") if expire_tag else "Không có hạn nộp"
+
+            # 🏭 Cào ngành nghề, kinh nghiệm, ngày cập nhật, cấp bậc & mô tả công việc từ trang chi tiết
+            industry = "Không có thông tin ngành nghề"
+            experience = "Không có thông tin kinh nghiệm"
+            updated_date = "Không có ngày cập nhật"
+            position = "Không có thông tin cấp bậc"
+            job_requirement = "Không có yêu cầu công việc"
+
+            try:
+                print(f"🔗 Đang truy cập: {job_link}")  # Debug URL trang chi tiết
+                job_response = requests.get(job_link, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                })
+
+                if job_response.status_code == 200:
+                    job_soup = BeautifulSoup(job_response.content, 'html.parser')
+
+                    # Tìm tất cả các strong và kiểm tra xem có chứa các thông tin cần thiết hay không
+                    all_strong_tags = job_soup.find_all('strong')
+                    for strong_tag in all_strong_tags:
+                        # Ngành nghề
+                        if "Ngành nghề" in strong_tag.text:
+                            industry_paragraph = strong_tag.find_next('p')
+                            if industry_paragraph:
+                                industry_links = industry_paragraph.find_all('a')
+                                industry = ", ".join(link.text.strip() for link in industry_links if link.text.strip())
+                            break
+
+                    for strong_tag in all_strong_tags:
+                        # Kinh nghiệm
+                        if "Kinh nghiệm" in strong_tag.text:
+                            experience_paragraph = strong_tag.find_next('p')
+                            if experience_paragraph:
+                                experience = " ".join(
+                                    " ".join(line.split()) for line in experience_paragraph.stripped_strings)
+                            break
+
+                    for strong_tag in all_strong_tags:
+                        # Ngày cập nhật
+                        if "Ngày cập nhật" in strong_tag.text:
+                            updated_date_paragraph = strong_tag.find_next('p')
+                            if updated_date_paragraph:
+                                updated_date = updated_date_paragraph.text.strip()
+                            break
+
+                    for strong_tag in all_strong_tags:
+                        # Cấp bậc
+                        if "Cấp bậc" in strong_tag.text:
+                            position_paragraph = strong_tag.find_next('p')
+                            if position_paragraph:
+                                position = position_paragraph.text.strip()
+                            break
+
+                    # Yêu cầu công việc (lấy lần xuất hiện thứ hai của class)
+                    job_requirement_divs = job_soup.find_all('div', class_='detail-row reset-bullet')
+                    if len(job_requirement_divs) > 1:
+                        job_requirement = " ".join(
+                            " ".join(line.split()) for line in job_requirement_divs[1].stripped_strings)
+
+            except Exception as e:
+                print(f"⚠️ Lỗi khi lấy thông tin chi tiết của {job_title}: {e}")
+
+            # Xử lý để đảm bảo các chuỗi không gây lỗi CSV
+            row = [
+                job_title.replace("\n", " ").strip(),
+                job_id,
+                company.replace("\n", " ").strip(),
+                salary.replace("\n", " ").strip(),
+                location.replace("\n", " ").strip(),
+                industry.replace("\n", " ").strip(),
+                experience.replace("\n", " ").strip(),
+                expire_date.replace("\n", " ").strip(),
+                updated_date.replace("\n", " ").strip(),
+                position.replace("\n", " ").strip(),
+                job_requirement.replace("\n", " ").strip(),
+                job_link.replace("\n", " ").strip()
+            ]
+
+            # Ghi dữ liệu vào file CSV
+            writer.writerow(row)
+
+        # Chờ 5 giây để tránh bị chặn (có thể điều chỉnh)
+        time.sleep(2)
+
+        # Tăng số trang
+        page += 1
+
+# Đóng trình duyệt khi hoàn tất
+driver.quit()
+
+print(f"✅ Dữ liệu đã được lưu vào {csv_filename}")
